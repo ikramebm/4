@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Streaming ESP32-CAM</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1000px;
+            margin: 20px auto;
+            text-align: center;
+        }
+        #videoCanvas {
+            max-width: 100%;
+            background-color: #f0f0f0;
+            border: 1px solid #ccc;
+        }
+        button {
+            margin: 0 10px;
+            padding: 10px 15px;
+        }
+        #startStream {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        #stopStream {
+            background-color: #f44336;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        #status {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .connected {
+            background-color: #e8f5e9;
+            color: #2e7d32;
+        }
+        .disconnected {
+            background-color: #ffebee;
+            color: #c62828;
+        }
+        #debugInfo {
+            margin: 10px 0;
+            padding: 10px;
+            text-align: left;
+            background-color: #f5f5f5;
+            border-radius: 4px;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <h1>Récepteur de Flux Vidéo</h1>
+    <div>
+        <button id="startStream">Démarrer Stream</button>
+        <button id="stopStream" disabled>Arrêter Stream</button>
+    </div>
+    <div id="status">En attente de connexion...</div>
+    <canvas id="videoCanvas" width="800" height="600"></canvas>
+    <div id="debugInfo">Informations de débogage :</div>
+
+    <script>
+        const socket = new WebSocket('wss://ikrame-s-websocket-server.glitch.me');
+        const startButton = document.getElementById('startStream');
+        const stopButton = document.getElementById('stopStream');
+        const canvas = document.getElementById('videoCanvas');
+        const ctx = canvas.getContext('2d');
+        const statusDiv = document.getElementById('status');
+        const debugInfo = document.getElementById('debugInfo');
+        
+        let frameCount = 0;
+        let lastFrameTime = Date.now();
+        
+        function updateDebugInfo(info) {
+            debugInfo.innerHTML += `<div>${new Date().toLocaleTimeString()} - ${info}</div>`;
+            debugInfo.scrollTop = debugInfo.scrollHeight;
+            if (debugInfo.children.length > 50) {
+                debugInfo.removeChild(debugInfo.firstChild);
+            }
+        }
+        
+        socket.onopen = () => {
+            updateDebugInfo('WebSocket connecté');
+            socket.send(JSON.stringify({type: 'register-web'}));
+            statusDiv.textContent = 'Connecté au serveur';
+            statusDiv.className = 'connected';
+            startButton.disabled = false;
+        };
+
+        socket.onclose = () => {
+            updateDebugInfo('WebSocket déconnecté');
+            statusDiv.textContent = 'Déconnecté du serveur';
+            statusDiv.className = 'disconnected';
+            startButton.disabled = true;
+            stopButton.disabled = true;
+        };
+
+        socket.onerror = (error) => {
+            updateDebugInfo(`Erreur WebSocket: ${error}`);
+            statusDiv.textContent = 'Erreur de connexion';
+            statusDiv.className = 'disconnected';
+        };
+
+        startButton.addEventListener('click', () => {
+            updateDebugInfo('Démarrage du stream demandé');
+            socket.send(JSON.stringify({type: 'start-stream'}));
+            startButton.disabled = true;
+            stopButton.disabled = false;
+            statusDiv.textContent = 'Stream en cours...';
+            frameCount = 0;
+            lastFrameTime = Date.now();
+        });
+
+        stopButton.addEventListener('click', () => {
+            socket.send(JSON.stringify({type: 'stop-stream'}));
+            startButton.disabled = false;
+            stopButton.disabled = true;
+            statusDiv.textContent = 'Stream arrêté';
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            updateDebugInfo('Stream arrêté');
+        });
+
+        socket.addEventListener('message', async (event) => {
+            try {
+                const message = JSON.parse(event.data);
+                
+                if (message.type === 'video-frame') {
+                    frameCount++;
+                    const currentTime = Date.now();
+                    if (currentTime - lastFrameTime >= 1000) {
+                        updateDebugInfo(`FPS: ${frameCount}`);
+                        frameCount = 0;
+                        lastFrameTime = currentTime;
+                    }
+
+                    updateDebugInfo(`Taille des données base64: ${message.data.length}`);
+                    
+                    const img = new Image();
+                    img.onerror = (err) => {
+                        updateDebugInfo(`Erreur de chargement de l'image: ${err}`);
+                    };
+                    img.onload = () => {
+                        updateDebugInfo(`Image chargée: ${img.width}x${img.height}`);
+                        ctx.clearRect(0, 0, canvas.width, canvas.height);
+                        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    };
+                    img.src = 'data:image/jpeg;base64,' + message.data;
+                }
+            } catch (error) {
+                updateDebugInfo(`Erreur de traitement: ${error}`);
+                console.error('Données reçues:', event.data);
+            }
+        });
+    </script>
+</body>
+</html>
